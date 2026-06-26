@@ -14,7 +14,8 @@ Build a self-hosted **footage library service** that:
 1. **Ingests** video/image assets (upload, metadata, transcoding, thumbnails, CLIP indexing).
 2. **Stores** originals + proxies + thumbnails on **Tencent COS**.
 3. **Exposes** a versioned **REST OpenAPI** for semantic search and signed download URLs.
-4. **Integrates** with OpenMontage without embedding storage logic in OpenMontage.
+4. **Provides** a **web admin console** (后台管理页面) for operators to upload, tag, browse, preview, and manage clips — **required in v1**, not optional.
+5. **Integrates** with OpenMontage without embedding storage logic in OpenMontage.
 
 OpenMontage remains a **thin client**: search → fetch proxy to local cache → compose. It never holds master files or COS credentials.
 
@@ -23,11 +24,13 @@ OpenMontage remains a **thin client**: search → fetch proxy to local cache →
 ## 2. Non-Goals (Do Not Build in v1)
 
 - Remotion / video composition
-- User-facing video editor
+- **Public-facing** consumer portal (素材库对外展示站 — 不做；**内部 Admin 后台必做**，见 §10)
+- User-facing video editor / timeline editor
 - 123pan / other cloud drives as primary storage (COS only for v1; archive backends are future work)
 - Streaming large files through the API body (always use COS pre-signed URLs)
 - Multi-region replication
 - Billing / payment (only optional quota counters per API key)
+- Multi-tenant RBAC with fine-grained roles (v1: single admin login + API keys)
 
 ---
 
@@ -109,58 +112,75 @@ Optional filters (applied before or after ranking):
 
 ## 4. Repository Layout
 
-Create a new Python project with this structure:
+Create a **monorepo** with Python API backend + React admin frontend:
 
 ```
 openmontage-footage/
 ├── README.md
 ├── pyproject.toml              # Python 3.11+, FastAPI, uvicorn, pydantic v2
 ├── .env.example
-├── openapi.yaml                # Generated from FastAPI or hand-written; must match §8
-├── Dockerfile
-├── docker-compose.yml          # api + optional postgres for v2 scale
+├── openapi.yaml                # Generated from FastAPI; must match §8–§9
+├── Dockerfile                  # Multi-stage: API + admin static build
+├── docker-compose.yml          # api + admin (nginx) + optional worker
 │
-├── app/
-│   ├── main.py                 # FastAPI app, router mount, lifespan
-│   ├── config.py               # pydantic-settings from env
-│   ├── auth.py                 # Bearer key validation, admin vs read scopes
+├── app/                        # ===== Backend (FastAPI) =====
+│   ├── main.py                 # FastAPI app, CORS, static mount for /admin
+│   ├── config.py
+│   ├── auth.py                 # Bearer keys + admin session (§10.2)
 │   ├── models/
-│   │   ├── clip.py             # ClipRecord pydantic models
-│   │   ├── ingest.py           # Ingest job models
-│   │   └── api.py              # Request/response DTOs
 │   ├── storage/
-│   │   ├── cos.py              # Tencent COS upload/download/presign
-│   │   └── paths.py            # Key naming helpers
 │   ├── index/
-│   │   ├── catalog.py          # Load/save index.jsonl + npy, row alignment
-│   │   ├── embedder.py         # CLIP wrapper (same semantics as OpenMontage)
-│   │   └── search.py           # Fused ranking, filters, MMR optional
 │   ├── ingest/
-│   │   ├── pipeline.py         # Orchestrate ingest job steps
-│   │   ├── probe.py            # ffprobe width/height/duration
-│   │   ├── transcode.py        # ffmpeg proxy + thumbs
-│   │   └── worker.py           # Background task runner (asyncio or arq/celery)
 │   ├── api/
-│   │   ├── v1_public.py        # /v1/info, /v1/search, /v1/clips/*
-│   │   └── v1_admin.py         # /v1/admin/*
+│   │   ├── v1_public.py
+│   │   └── v1_admin.py         # Includes UI-oriented list/stats routes (§9)
 │   └── cli/
-│       └── main.py             # Typer CLI: ingest, reindex, doctor
+│       └── main.py
+│
+├── admin/                      # ===== Frontend Admin Console (Required v1) =====
+│   ├── package.json            # React 19 + Vite + TypeScript
+│   ├── vite.config.ts
+│   ├── index.html
+│   ├── tailwind.config.ts      # Tailwind CSS v4
+│   ├── src/
+│   │   ├── main.tsx
+│   │   ├── App.tsx
+│   │   ├── api/                # Typed fetch client → backend OpenAPI
+│   │   │   └── client.ts
+│   │   ├── auth/               # Login, session token storage
+│   │   │   └── AuthProvider.tsx
+│   │   ├── pages/
+│   │   │   ├── LoginPage.tsx
+│   │   │   ├── DashboardPage.tsx
+│   │   │   ├── ClipsPage.tsx           # Grid/list + filters
+│   │   │   ├── ClipDetailPage.tsx      # Preview + edit metadata
+│   │   │   ├── UploadPage.tsx          # Drag-drop + batch upload
+│   │   │   ├── IngestJobsPage.tsx      # Job queue & progress
+│   │   │   ├── CollectionsPage.tsx     # Manage collections taxonomy
+│   │   │   ├── SearchPreviewPage.tsx   # Test semantic search (admin)
+│   │   │   └── SettingsPage.tsx        # Health, API keys display, COS status
+│   │   ├── components/
+│   │   │   ├── layout/         # Sidebar, Header, AppShell
+│   │   │   ├── clips/          # ClipCard, ClipGrid, VideoPlayer, TagInput
+│   │   │   ├── upload/         # DropZone, UploadQueue, ProgressBar
+│   │   │   └── ui/             # Button, Modal, Toast, Pagination, EmptyState
+│   │   ├── hooks/
+│   │   │   ├── useClips.ts
+│   │   │   ├── useIngestJob.ts
+│   │   │   └── useUpload.ts
+│   │   └── lib/
+│   │       └── format.ts
+│   └── public/
 │
 ├── tests/
-│   ├── test_search.py
-│   ├── test_ingest.py
-│   ├── test_cos_mock.py
-│   └── fixtures/sample.mp4
-│
-└── scripts/
-    └── bootstrap_catalog.py    # Empty catalog init
+├── scripts/
+└── deploy/
+    └── nginx.conf              # Serve admin SPA + reverse proxy /v1 → api
 ```
 
-**Language:** Python 3.11+  
-**API framework:** FastAPI  
-**CLI:** Typer  
-**COS SDK:** `cos-python-sdk-v5` (official Tencent)  
-**Media:** ffmpeg + ffprobe (system dependencies, document in README)
+**Backend:** Python 3.11+, FastAPI, Typer, `cos-python-sdk-v5`, ffmpeg/ffprobe  
+**Admin frontend:** React 19, Vite, TypeScript, Tailwind CSS v4, React Router  
+**Admin UI language:** 中文界面为主（labels、按钮、空状态、错误提示），代码与 API 字段保持英文
 
 ---
 
@@ -197,6 +217,13 @@ MAX_UPLOAD_BYTES=2147483648      # 2GB default
 # Search
 TAG_WEIGHT_DEFAULT=0.3
 SEARCH_DEFAULT_TOP_K=10
+
+# Admin Web Console
+ADMIN_SESSION_SECRET=change-me-in-production   # JWT/session signing
+ADMIN_PASSWORD=your-admin-password             # v1 single-operator login
+ADMIN_SESSION_TTL_HOURS=24
+ADMIN_CORS_ORIGINS=http://localhost:5173,https://footage.example.com
+ADMIN_BASE_PATH=/admin                         # SPA mount path in production
 ```
 
 ### 5.2 Object key layout
@@ -248,8 +275,9 @@ OpenMontage downloads directly from COS using the signed URL — **not** through
 
 | Entry | Auth | v1 |
 |-------|------|-----|
-| `POST /v1/admin/ingest` (multipart file) | admin key | **Required** |
-| `POST /v1/admin/ingest` (JSON `{ "source_url": "..." }`) | admin key | Optional |
+| **Admin Web Console** upload page (`POST /v1/admin/ingest`) | admin session | **Required** |
+| `POST /v1/admin/ingest` (multipart file) | admin session or admin API key | **Required** |
+| `POST /v1/admin/ingest` (JSON `{ "source_url": "..." }`) | admin | Optional |
 | CLI `footage ingest ./file.mp4 --collection nature --tags a,b` | local | **Required** |
 
 ### 6.2 Ingest job state machine
@@ -542,9 +570,379 @@ Soft delete: set `status=archived`. Do not delete COS objects in v1 (optional ha
 
 COS connectivity, catalog loaded, ffmpeg available, CLIP model loadable, disk space.
 
+### 9.6 Admin UI support endpoints (Required for Web Console)
+
+These routes power the **后台管理页面**. All require `admin` scope (session cookie or Bearer admin key).
+
+#### `POST /v1/admin/auth/login`
+
+Browser login — avoids storing raw API keys in frontend source.
+
+**Request:**
+
+```json
+{ "password": "your-admin-password" }
+```
+
+**Response 200:**
+
+```json
+{
+  "token": "eyJ...",
+  "expires_at": 1719480000,
+  "scope": "admin"
+}
+```
+
+Frontend stores token in `sessionStorage` (or HttpOnly cookie if backend sets it). Subsequent requests: `Authorization: Bearer <token>`.
+
+Alternative login: `{ "api_key": "sk_admin_..." }` for power users.
+
+#### `POST /v1/admin/auth/logout`
+
+Invalidate session (no-op if JWT stateless; document behavior).
+
+#### `GET /v1/admin/stats`
+
+Dashboard metrics.
+
+```json
+{
+  "clip_count": 1234,
+  "active_count": 1200,
+  "processing_count": 3,
+  "failed_count": 2,
+  "archived_count": 29,
+  "ingest_jobs_today": 15,
+  "collections_count": 7,
+  "storage_bytes_estimate": 53687091200,
+  "recent_ingests": [
+    { "job_id": "...", "clip_id": "...", "status": "active", "filename": "sample.mp4", "created_at": 1719400000 }
+  ]
+}
+```
+
+#### `GET /v1/admin/clips`
+
+Paginated clip browser for admin grid.
+
+**Query params:**
+
+| Param | Default | Description |
+|-------|---------|-------------|
+| `page` | 1 | Page number |
+| `page_size` | 24 | 12 / 24 / 48 |
+| `status` | `active` | `active` \| `processing` \| `failed` \| `archived` \| `all` |
+| `collection` | — | Filter by collection |
+| `kind` | — | `video` \| `image` |
+| `q` | — | Keyword search on tags + source_tags + clip_id |
+| `sort` | `added_at_desc` | `added_at_desc` \| `added_at_asc` \| `duration_desc` |
+
+**Response 200:**
+
+```json
+{
+  "page": 1,
+  "page_size": 24,
+  "total": 156,
+  "items": [
+    {
+      "clip_id": "footage_a1b2c3d4",
+      "kind": "video",
+      "status": "active",
+      "duration": 12.4,
+      "width": 1920,
+      "height": 1080,
+      "collections": ["nature"],
+      "tags": ["forest"],
+      "source_tags": "misty forest morning",
+      "thumb_url": "https://...presigned.../frame_02.jpg",
+      "added_at": 1719400000
+    }
+  ]
+}
+```
+
+#### `GET /v1/admin/ingest/jobs`
+
+List ingest jobs (newest first).
+
+**Query:** `page`, `page_size`, `status` (optional filter)
+
+**Response:** `{ "page", "page_size", "total", "items": [ IngestJob ] }`
+
+#### `GET /v1/admin/collections`
+
+List all collections with clip counts.
+
+```json
+{
+  "collections": [
+    { "name": "nature", "clip_count": 420, "description": "" },
+    { "name": "city", "clip_count": 88, "description": "" }
+  ]
+}
+```
+
+#### `POST /v1/admin/collections`
+
+Create or update collection metadata (does not ingest clips).
+
+```json
+{ "name": "chinese-history-drama", "description": "古装剧情类影视素材" }
+```
+
+#### `DELETE /v1/admin/collections/{name}`
+
+Remove collection label from taxonomy. **Does not** delete clips — only removes collection name from registry (clips retain the tag until edited).
+
+#### `POST /v1/admin/clips/{clip_id}/preview-url`
+
+Return short-lived presigned URL for **proxy video** or image thumb — used by admin `<video>` player.
+
+```json
+{
+  "clip_id": "footage_xxx",
+  "url": "https://...",
+  "expires_at": 1719400900,
+  "kind": "video"
+}
+```
+
+#### `POST /v1/admin/search-preview`
+
+Same body as `POST /v1/search` but admin-only; returns full clip metadata + preview URLs for UI search lab page.
+
 ---
 
-## 10. CLI (Internal Ops)
+## 10. Admin Web Console (后台管理页面) — Required v1
+
+The admin console is the **primary operator interface** for uploading and managing footage. CLI and curl are secondary; the code agent **must** ship a working SPA.
+
+### 10.1 Goals
+
+Operators (非开发者) must be able to:
+
+1. Log in securely
+2. Upload single/batch video and image files with drag-and-drop
+3. Fill metadata (collections, tags, mood, license, shot_type, source_tags)
+4. Watch ingest progress until `active` or see failure reason
+5. Browse all clips in a visual grid with thumbnails
+6. Preview proxy video inline
+7. Edit metadata and archive clips
+8. Manage collection taxonomy
+9. Test semantic search (same engine OpenMontage uses)
+10. View system health (COS, catalog, ffmpeg)
+
+### 10.2 Authentication UX
+
+**Login page** (`/admin/login`):
+
+- Fields: 管理员密码 (maps to `ADMIN_PASSWORD`) **or** Admin API Key (advanced toggle)
+- On success → redirect to `/admin/dashboard`
+- Store JWT/session token; attach to all API calls
+- Auto-logout on 401; show 登录已过期 toast
+
+**Do not** embed admin API keys in frontend build artifacts or `VITE_*` env vars.
+
+### 10.3 Page Specifications
+
+#### Dashboard (`/admin/dashboard`)
+
+| Widget | Data source | UI |
+|--------|-------------|-----|
+| 素材总数 | `/v1/admin/stats` | Stat cards: 总数 / 可用 / 处理中 / 失败 / 已归档 |
+| 今日入库 | stats | Number |
+| 存储占用 | stats | Human-readable GB |
+| 最近入库 | stats.recent_ingests | Table: 文件名, 状态, 时间, 跳转详情 |
+| 系统状态 | `/v1/admin/health` | Green/red badges: COS / Catalog / FFmpeg / CLIP |
+
+Primary CTA button: **上传素材** → `/admin/upload`
+
+#### Upload (`/admin/upload`)
+
+**Layout:**
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  上传素材                                                │
+├─────────────────────────────────────────────────────────┤
+│  ┌─────────────────────────────────────────────────┐   │
+│  │  拖拽文件到此处，或点击选择                        │   │
+│  │  支持 MP4 MOV MKV WebM JPG PNG WebP              │   │
+│  │  单文件最大 2GB · 可多选                          │   │
+│  └─────────────────────────────────────────────────┘   │
+│                                                         │
+│  默认元数据（应用于本批所有文件）                          │
+│  ┌ Collections multi-select ─────────────────────┐     │
+│  ┌ Tags chip input ──────────────────────────────┐     │
+│  ┌ Mood multi-select ────────────────────────────┐     │
+│  ┌ 授权类型 / 创作者 / 景别 / 时段 ────────────────┐     │
+│  ┌ 检索描述 source_tags (textarea) ──────────────┐     │
+│                                                         │
+│  上传队列                                                │
+│  ┌ file.mp4  ████████░░ 80%  indexing  [取消] ────┐     │
+│  └ forest.jpg  ✓ 已完成  [查看] ──────────────────┘     │
+└─────────────────────────────────────────────────────────┘
+```
+
+**Behavior:**
+
+1. User selects files → show queue rows immediately
+2. For each file: `POST /v1/admin/ingest` multipart with shared metadata + per-file defaults
+3. Poll `GET /v1/admin/ingest/{job_id}` every 2s until terminal state
+4. Progress bar mapped to job `progress` (0–1) and `status` label (上传中 / 转码中 / 索引中 / 完成 / 失败)
+5. On success: row shows thumbnail + link to clip detail
+6. On failure: show `error` message inline with retry button
+7. Support **batch upload** (sequential or max 3 concurrent uploads — configurable)
+
+**Per-file metadata override (v1 nice-to-have, v1.1 if tight):** expand row to edit tags before upload starts.
+
+#### Clips Library (`/admin/clips`)
+
+- **View:** responsive grid (card = thumb + duration badge + clip_id truncated + collection chips)
+- **Filters sidebar:** status, collection, kind (video/image), keyword search
+- **Sort:** 最新入库 / 最早 / 时长
+- **Pagination:** 24 per page
+- **Bulk actions (v1):** multi-select → 批量归档
+- **Empty state:** 暂无素材，去上传
+
+Click card → Clip Detail
+
+#### Clip Detail (`/admin/clips/:clipId`)
+
+**Layout:**
+
+```
+┌──────────────────┬──────────────────────────────────────┐
+│  Video/Image     │  clip_id: footage_xxx    [复制]       │
+│  preview player  │  状态: 可用                           │
+│  (proxy URL)     │  1920×1080 · 12.4s · motion 0.35     │
+│                  │  ─────────────────────────────────    │
+│  Filmstrip of    │  Collections [editable multi-select]  │
+│  5 thumb frames  │  Tags [chip input]                    │
+│                  │  Mood / 景别 / 时段 / 授权 / 创作者      │
+│                  │  检索描述 source_tags [textarea]       │
+│                  │  [保存] [归档] [下载原片] [下载代理]      │
+└──────────────────┴──────────────────────────────────────┘
+```
+
+- Load preview via `POST /v1/admin/clips/{id}/preview-url`
+- Save → `PATCH /v1/admin/clips/{id}` with toast 保存成功
+- 归档 → confirm modal → `DELETE /v1/admin/clips/{id}`
+- Download buttons → open presigned URL in new tab
+
+#### Ingest Jobs (`/admin/jobs`)
+
+- Table: job_id, filename, clip_id, status, progress, created_at, error
+- Filter by status
+- Click row → job detail or clip detail if active
+- Auto-refresh every 5s when any job is non-terminal
+
+#### Collections (`/admin/collections`)
+
+- List collections with clip counts
+- Add collection: name + description (中文描述 OK)
+- Cannot delete collection if clip_count > 0 without confirmation (or block with message)
+
+#### Search Preview (`/admin/search`)
+
+- Same UI as OpenMontage would use: query input + optional filters (collection, kind, duration)
+- Call `POST /v1/admin/search-preview`
+- Results grid with **score** displayed (0.00–1.00) for tuning tags/descriptions
+- Purpose: operators verify CLIP indexing quality before OpenMontage production
+
+#### Settings (`/admin/settings`)
+
+- Read-only: API version, COS bucket/region, CLIP model, catalog path
+- Health check button → `/v1/admin/health`
+- Display **read-only** OpenMontage connection snippet:
+
+  ```
+  FOOTAGE_LIBRARY_API_URL=https://...
+  FOOTAGE_LIBRARY_ACCESS_KEY=sk_read_...  (masked, copy button for admin)
+  ```
+
+- Logout button
+
+### 10.4 UI/UX Requirements
+
+| Requirement | Detail |
+|-------------|--------|
+| Language | 简体中文 UI copy |
+| Responsive | Desktop-first; usable at 1280px+; upload page OK at 1024px |
+| Loading | Skeleton cards on clip grid; spinner on preview load |
+| Errors | Toast notifications; never silent fail |
+| Video player | HTML5 `<video>` with proxy URL; show duration |
+| Accessibility | Form labels, keyboard focus on modals, sufficient contrast |
+| Theme | Light default; neutral grays + one accent color (e.g. blue) |
+
+**Component library:** shadcn/ui or Headless UI + Tailwind — agent's choice, but must look professional, not raw HTML.
+
+### 10.5 Frontend Technical Requirements
+
+```json
+// admin/package.json dependencies (minimum)
+{
+  "dependencies": {
+    "react": "^19",
+    "react-dom": "^19",
+    "react-router-dom": "^7",
+    "tailwindcss": "^4"
+  },
+  "devDependencies": {
+    "typescript": "^5",
+    "vite": "^6",
+    "@vitejs/plugin-react": "^4"
+  }
+}
+```
+
+- **API client:** typed functions in `src/api/client.ts`; base URL from `import.meta.env.VITE_API_BASE_URL` (default `/` when proxied)
+- **Dev proxy:** Vite dev server proxies `/v1` → `http://localhost:8080`
+- **Production:** build `admin/dist` → served by nginx at `/admin/` or FastAPI `StaticFiles`
+- **Routing:** SPA fallback — all `/admin/*` routes serve `index.html`
+
+### 10.6 Deployment (docker-compose)
+
+```yaml
+services:
+  api:
+    build: .
+    ports: ["8080:8080"]
+    env_file: .env
+    volumes: ["catalog-data:/var/lib/footage-library/catalog"]
+
+  admin:
+    build:
+      context: ./admin
+      dockerfile: Dockerfile
+    ports: ["3000:80"]
+    depends_on: [api]
+    environment:
+      VITE_API_BASE_URL: ""   # same-origin via nginx proxy
+
+  # deploy/nginx.conf:
+  #   /admin/  → admin container static
+  #   /v1/     → api:8080
+```
+
+Single public port (e.g. 443 via nginx): operators visit `https://footage.example.com/admin/`.
+
+### 10.7 Admin Frontend Acceptance Criteria
+
+- [ ] Login with `ADMIN_PASSWORD` works; invalid password shows error
+- [ ] Upload 1 MP4 via drag-drop → job progresses → clip appears in library grid
+- [ ] Clip detail plays proxy video in browser
+- [ ] Edit tags + source_tags → save → search preview finds clip with new query
+- [ ] Archive clip → disappears from default library view
+- [ ] Collections page shows correct counts
+- [ ] Dashboard stats match actual catalog counts
+- [ ] `npm run build` in `admin/` succeeds; production bundle served at `/admin/`
+
+---
+
+## 11. CLI (Internal Ops)
 
 Install entry point: `footage = app.cli.main:app`
 
@@ -561,9 +959,9 @@ CLI uses same ingest pipeline as admin API (call shared `ingest.pipeline` module
 
 ---
 
-## 11. Authentication & Rate Limits
+## 12. Authentication & Rate Limits
 
-### 11.1 API keys
+### 12.1 API keys
 
 Parse `FOOTAGE_API_KEYS`:
 
@@ -576,7 +974,7 @@ Middleware:
 - Missing/invalid key → `401`
 - `read` key on admin route → `403`
 
-### 11.2 Rate limits (v1 simple)
+### 12.2 Rate limits (v1 simple)
 
 In-memory per key:
 
@@ -585,9 +983,20 @@ In-memory per key:
 
 Return `429` with `Retry-After` header.
 
+### 12.3 Admin session auth
+
+In addition to Bearer API keys, support **browser session** for admin UI:
+
+- `POST /v1/admin/auth/login` validates `ADMIN_PASSWORD` or admin-scoped API key
+- Issue signed JWT (HS256, `ADMIN_SESSION_SECRET`, TTL from `ADMIN_SESSION_TTL_HOURS`)
+- JWT payload: `{ "sub": "admin", "scope": "admin", "exp": ... }`
+- Middleware accepts either valid JWT **or** Bearer key with `admin` scope on `/v1/admin/*`
+
+CORS: allow origins from `ADMIN_CORS_ORIGINS` with credentials if using cookies.
+
 ---
 
-## 12. Error Format
+## 13. Error Format
 
 All errors JSON:
 
@@ -605,7 +1014,7 @@ Standard codes: `unauthorized`, `forbidden`, `not_found`, `invalid_request`, `ra
 
 ---
 
-## 13. OpenMontage Integration Contract (Downstream)
+## 14. OpenMontage Integration Contract (Downstream)
 
 After this project ships, OpenMontage will add (separate PR):
 
@@ -625,7 +1034,7 @@ Document in README a **"OpenMontage Quick Start"** section with curl examples.
 
 ---
 
-## 14. Collections & Taxonomy (Generic)
+## 15. Collections & Taxonomy (Generic)
 
 Ship with **seed collections** (empty, documented in README only — no hardcoded content):
 
@@ -643,7 +1052,7 @@ Agents filter by `collections` at search time. **Do not** bake history-specific 
 
 ---
 
-## 15. Implementation Phases & Acceptance Criteria
+## 16. Implementation Phases & Acceptance Criteria
 
 ### Phase 1 — Foundation (MVP)
 
@@ -678,21 +1087,45 @@ Agents filter by `collections` at search time. **Do not** bake history-specific 
 
 **Accept:** Search query related to ingested clip returns it in top 3; download URL fetches playable proxy MP4.
 
-### Phase 4 — Admin & Ops
+### Phase 4 — Admin API & Ops
 
 **Deliver:**
 
 - [ ] PATCH/DELETE clip admin routes
+- [ ] Admin UI routes: stats, clips list, collections, auth login (§9.6)
 - [ ] `footage reindex`, `footage sync-catalog`
 - [ ] Rate limiting + structured errors
-- [ ] Dockerfile + docker-compose
-- [ ] README with env setup, COS bucket policy notes, OpenMontage curl examples
+- [ ] Dockerfile (API) + docker-compose skeleton
+- [ ] README with env setup, COS bucket policy notes
 
-**Accept:** Docker compose up → ingest via curl → search → download works end-to-end.
+**Accept:** Docker API up → ingest via curl → search → download works end-to-end.
+
+### Phase 5 — Admin Web Console (后台) **Required**
+
+**Deliver:**
+
+- [ ] React + Vite + Tailwind admin app under `admin/` (§10)
+- [ ] All pages: Login, Dashboard, Upload, Clips, Clip Detail, Jobs, Collections, Search Preview, Settings
+- [ ] Drag-drop upload with job polling and progress UI
+- [ ] Inline video preview on clip detail
+- [ ] nginx or FastAPI static serving at `/admin/`
+- [ ] Admin Dockerfile + docker-compose `admin` service
+
+**Accept:** Operator opens `http://localhost:3000/admin/` (or compose URL) → logs in → uploads MP4 → sees clip in grid → previews video → edits tags → search preview finds it. All §10.7 checkboxes pass.
+
+### Phase 6 — Polish & OpenMontage Handoff
+
+**Deliver:**
+
+- [ ] OpenMontage curl examples in README
+- [ ] `openapi.yaml` complete including §9.6 admin UI routes
+- [ ] Basic Playwright or Vitest smoke test for login + upload flow (optional but recommended)
+
+**Accept:** Full §22 Definition of Done.
 
 ---
 
-## 16. Testing Requirements
+## 17. Testing Requirements
 
 | Test | Requirement |
 |------|-------------|
@@ -703,11 +1136,14 @@ Agents filter by `collections` at search time. **Do not** bake history-specific 
 | `test_presign` | Mock COS client returns HTTPS URL |
 | `test_auth_scopes` | read key blocked from admin routes |
 
-Use pytest. Mock COS and ffmpeg in unit tests; one optional integration test marked `@pytest.mark.integration` requiring real COS credentials.
+| `test_auth_scopes` | read key blocked from admin routes |
+| `admin/build` | CI runs `npm run build` in `admin/` without error |
+
+Use pytest for backend. For frontend: at minimum `npm run build` in CI; optional Vitest component tests or Playwright e2e for login → upload happy path.
 
 ---
 
-## 17. Security Checklist
+## 18. Security Checklist
 
 - [ ] Never log `COS_SECRET_KEY` or API keys
 - [ ] COS bucket policy: private; only server role has Put/Get
@@ -715,10 +1151,13 @@ Use pytest. Mock COS and ffmpeg in unit tests; one optional integration test mar
 - [ ] Validate uploaded MIME/types; reject executables
 - [ ] Max upload size enforced at reverse proxy + app layer
 - [ ] CORS: restrict to known origins in production (configurable)
+- [ ] Admin JWT secret rotated in production; `ADMIN_PASSWORD` not default
+- [ ] Admin SPA never ships with embedded API keys
+- [ ] Content-Security-Policy on admin static assets (basic)
 
 ---
 
-## 18. COS Bucket Policy Notes (README)
+## 19. COS Bucket Policy Notes (README)
 
 Document for operators:
 
@@ -729,7 +1168,7 @@ Document for operators:
 
 ---
 
-## 19. Example curl Flow (Copy to README)
+## 20. Example curl Flow (Copy to README)
 
 ```bash
 # Info
@@ -760,21 +1199,22 @@ curl -s -H "Authorization: Bearer $FOOTAGE_READ_KEY" \
 
 ---
 
-## 20. Definition of Done
+## 21. Definition of Done
 
 The project is **complete** when a code agent can demonstrate:
 
-1. Fresh clone + `.env` + `docker compose up`
-2. Admin ingest of sample video via curl or CLI
-3. Public search returns ingested clip with score and thumb URL
-4. Download returns valid COS pre-signed URL; file plays in ffprobe
-5. Catalog files exist locally and (if enabled) on COS
-6. `pytest` passes (integration tests optional/skipped in CI)
-7. `openapi.yaml` served at `/openapi.json` matches §8–§9
+1. Fresh clone + `.env` + `docker compose up` (API + admin)
+2. Open **`/admin/`** in browser → login → upload MP4 via UI → clip appears in library
+3. Clip detail plays proxy video; metadata edit persists
+4. Search preview page returns ingested clip for relevant query
+5. Public API: search + download works with **read** API key (OpenMontage path)
+6. Catalog files exist locally and (if enabled) on COS
+7. `pytest` passes; `cd admin && npm run build` passes
+8. `openapi.yaml` served at `/openapi.json` matches §8–§9 including §9.6
 
 ---
 
-## 21. OpenMontage File References (Read-Only Context)
+## 22. OpenMontage File References (Read-Only Context)
 
 When implementing CLIP/search compatibility, mirror these OpenMontage files (do not copy the repo; reimplement equivalent logic):
 
