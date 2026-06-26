@@ -24,8 +24,8 @@ MiniMax has **three separate integration paths** in OpenMontage. Do not mix keys
 ## Install and authenticate
 
 ```bash
-npm install -g mmx-cli
-mmx --version
+npm install          # repo root — installs mmx-cli from package.json
+npx mmx --version
 
 # Subscription Key from: MiniMax console → Billing → Token Plan
 export MINIMAX_TOKEN_PLAN_KEY=sk-xxxxx
@@ -132,7 +132,7 @@ mmx text chat --system "You are a scriptwriter." --message "..." --output json
 | Symptom | Fix |
 |---------|-----|
 | 401 Unauthorized | Wrong key type or region — verify Subscription Key, run `mmx config set --key region` |
-| `mmx: command not found` | `npm install -g mmx-cli` or use `npx mmx-cli` |
+| `mmx: command not found` | Run `npm install` at repo root (installs `mmx-cli` locally) |
 | Quota exhausted | `mmx quota` — wait for reset or upgrade plan |
 | Video timeout | Use `async_mode: true` on `minimax_token_plan_video`, poll task separately |
 | Wrong provider selected | Set `preferred_provider="minimax_token_plan"` (not `"minimax"`) |

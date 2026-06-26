@@ -1,0 +1,8 @@
+{
+  "name": "openmontage",
+  "private": true,
+  "description": "OpenMontage repo-level Node dependencies (MiniMax Token Plan mmx CLI)",
+  "dependencies": {
+    "mmx-cli": "^1.0.16"
+  }
+}

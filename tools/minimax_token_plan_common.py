@@ -18,13 +18,23 @@ BILLING = "token_plan"
 
 INSTALL_INSTRUCTIONS = (
     "MiniMax Token Plan uses the mmx CLI with a Subscription Key (not pay-as-you-go API Keys).\n"
-    "  1. npm install -g mmx-cli\n"
+    "  1. npm install   (installs mmx-cli from repo package.json)\n"
     "  2. Get your Subscription Key from MiniMax console: Billing > Token Plan\n"
     "  3. mmx auth login --api-key sk-xxx\n"
     "     Or set MINIMAX_TOKEN_PLAN_KEY in .env (tools pass --api-key automatically)\n"
     "  4. If API calls return 401: mmx config set --key region --value global|cn\n"
     "  5. Check quota: mmx quota"
 )
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _local_mmx_binary() -> Path | None:
+    for name in ("mmx", "mmx.cmd", "mmx.ps1"):
+        candidate = _REPO_ROOT / "node_modules" / ".bin" / name
+        if candidate.is_file():
+            return candidate
+    return None
 
 AGENT_SKILLS = ["minimax-token-plan"]
 
@@ -34,12 +44,15 @@ def get_token_plan_key() -> str | None:
 
 
 def mmx_base_command() -> list[str]:
+    local_mmx = _local_mmx_binary()
+    if local_mmx is not None:
+        return [str(local_mmx)]
     if shutil.which("mmx"):
         return ["mmx"]
     if shutil.which("npx"):
         return ["npx", "mmx-cli"]
     raise DependencyError(
-        "mmx CLI not found. Install with: npm install -g mmx-cli\n" + INSTALL_INSTRUCTIONS
+        "mmx CLI not found. Run: npm install (repo root)\n" + INSTALL_INSTRUCTIONS
     )
 
 

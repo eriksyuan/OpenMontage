@@ -147,7 +147,7 @@ No subscription — pure pay-as-you-go, no minimum spend.
 
 1. Subscribe to Token Plan on [platform.minimax.io](https://platform.minimax.io/) (or mainland China console)
 2. Copy your **Subscription Key** from Billing > Token Plan (not API Keys > Create secret key)
-3. Install the CLI: `npm install -g mmx-cli`
+3. Install dependencies: `npm install` (repo root, installs `mmx-cli` from `package.json`)
 4. Authenticate: `mmx auth login --api-key sk-xxxxx`
 5. Add to `.env`: `MINIMAX_TOKEN_PLAN_KEY=sk-xxxxx`
 6. Verify: `mmx quota`
