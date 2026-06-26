@@ -133,6 +133,45 @@ No subscription — pure pay-as-you-go, no minimum spend.
 
 ---
 
+### MiniMax Token Plan — mmx CLI (multimodal subscription)
+
+> **One Subscription Key, five modalities.** Token Plan users call image, video, TTS, music, and text through the official `mmx` CLI. This is **not** the same as pay-as-you-go API Keys or fal.ai's `FAL_KEY` MiniMax routing.
+
+**OpenMontage provider:** `minimax_token_plan` (distinct from `provider=minimax` used by fal.ai and future pay-as-you-go HTTP tools)
+
+**Tools unlocked:** `minimax_token_plan_image`, `minimax_token_plan_video`, `minimax_token_plan_tts`, `minimax_token_plan_music`, `minimax_token_plan_text`
+
+**Env var:** `MINIMAX_TOKEN_PLAN_KEY` (Subscription Key from Billing > Token Plan)
+
+#### Setup
+
+1. Subscribe to Token Plan on [platform.minimax.io](https://platform.minimax.io/) (or mainland China console)
+2. Copy your **Subscription Key** from Billing > Token Plan (not API Keys > Create secret key)
+3. Install the CLI: `npm install -g mmx-cli`
+4. Authenticate: `mmx auth login --api-key sk-xxxxx`
+5. Add to `.env`: `MINIMAX_TOKEN_PLAN_KEY=sk-xxxxx`
+6. Verify: `mmx quota`
+
+#### Selector usage
+
+```python
+ImageSelector().execute({"preferred_provider": "minimax_token_plan", "prompt": "..."})
+TTSSelector().execute({"preferred_provider": "minimax_token_plan", "text": "..."})
+VideoSelector().execute({"preferred_provider": "minimax_token_plan", "prompt": "..."})
+```
+
+#### vs other MiniMax paths
+
+| Path | Provider | Key | Tools |
+|------|----------|-----|-------|
+| Token Plan (mmx CLI) | `minimax_token_plan` | `MINIMAX_TOKEN_PLAN_KEY` | `minimax_token_plan_*` |
+| fal.ai gateway | `minimax` | `FAL_KEY` | `minimax_video` |
+| Pay-as-you-go API | `minimax` | `MINIMAX_API_KEY` | Future direct HTTP tools |
+
+**Agent skill:** `minimax-token-plan` in `.agents/skills/`
+
+---
+
 ### ElevenLabs — Voice, Music, Sound Effects
 
 > **Premium voice quality.** Best TTS for narration-heavy videos. Also generates music and sound effects.
