@@ -8,6 +8,9 @@ setup:
 	@echo "==> Installing Python dependencies..."
 	$(PYTHON) -m pip install -r requirements.txt
 	@echo ""
+	@echo "==> Installing repo Node dependencies (mmx-cli for MiniMax Token Plan)..."
+	npm install
+	@echo ""
 	@echo "==> Installing Remotion composer..."
 	cd remotion-composer && npm install
 	@echo ""
